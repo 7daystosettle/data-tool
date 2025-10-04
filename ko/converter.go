@@ -68,6 +68,14 @@ func (e *Ko) ToXml(w io.Writer) error {
 
 func xmlToKdl(r io.Reader) (*document.Document, error) {
 	decoder := xml.NewDecoder(r)
+	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		switch strings.ToLower(charset) {
+		case "us-ascii":
+			return input, nil
+		default:
+			return nil, fmt.Errorf("unsupported charset: %s", charset)
+		}
+	}
 	doc := &document.Document{}
 	var stack []*document.Node
 
@@ -179,6 +187,14 @@ func xmlToKdl(r io.Reader) (*document.Document, error) {
 
 func parseXMLFragment(s string) ([]*document.Node, error) {
 	dec := xml.NewDecoder(strings.NewReader("<frag>" + s + "</frag>"))
+	dec.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		switch strings.ToLower(charset) {
+		case "us-ascii":
+			return input, nil
+		default:
+			return nil, fmt.Errorf("unsupported charset: %s", charset)
+		}
+	}
 	var stack []*document.Node
 	var out []*document.Node
 
@@ -354,6 +370,7 @@ func writeKDL(doc *document.Document, w io.Writer) error {
 }
 
 func emitNode(w *bufio.Writer, n *document.Node, depth int) error {
+	var err error
 	name := n.Name.NodeNameString()
 
 	if name == commentNodeIdentifier {
@@ -367,12 +384,22 @@ func emitNode(w *bufio.Writer, n *document.Node, depth int) error {
 		return nil
 	}
 
-	if name == textNodeIdentifier {
+	// Special case: if a node has only one child and it's a _text node,
+	// treat the text as an argument of the parent node.
+	isInlineText := len(n.Children) == 1 &&
+		n.Children[0].Name.NodeNameString() == textNodeIdentifier &&
+		len(n.Children[0].Arguments) > 0
+
+	if name == textNodeIdentifier && !isInlineText {
 		indent(w, depth)
 
-		_, err := w.WriteString(name + " ")
+		err = writeKDLString(w, name)
 		if err != nil {
 			return fmt.Errorf("write text node name: %w", err)
+		}
+		_, err = w.WriteString(" ")
+		if err != nil {
+			return fmt.Errorf("write text node space: %w", err)
 		}
 
 		if len(n.Arguments) > 0 {
@@ -391,13 +418,20 @@ func emitNode(w *bufio.Writer, n *document.Node, depth int) error {
 
 	indent(w, depth)
 
-	_, err := w.WriteString(name)
-	if err != nil {
-		return fmt.Errorf("write node name: %w", err)
+	if strings.HasPrefix(name, "_") {
+		err := writeKDLString(w, name)
+		if err != nil {
+			return fmt.Errorf("write quoted node name: %w", err)
+		}
+	} else {
+		_, err := w.WriteString(name)
+		if err != nil {
+			return fmt.Errorf("write node name: %w", err)
+		}
 	}
 
 	for _, a := range n.Arguments {
-		_, err = w.WriteString(" ")
+		_, err := w.WriteString(" ")
 		if err != nil {
 			return fmt.Errorf("write arg space: %w", err)
 		}
@@ -436,7 +470,18 @@ func emitNode(w *bufio.Writer, n *document.Node, depth int) error {
 		}
 	}
 
-	if len(n.Children) == 0 {
+	if isInlineText {
+		_, err = w.WriteString(" ")
+		if err != nil {
+			return fmt.Errorf("write inline text space: %w", err)
+		}
+		err = writeKDLString(w, n.Children[0].Arguments[0].ValueString())
+		if err != nil {
+			return fmt.Errorf("write inline text value: %w", err)
+		}
+	}
+
+	if len(n.Children) == 0 || isInlineText {
 		_, err = w.WriteString("\n")
 		if err != nil {
 			return fmt.Errorf("write node closing newline: %w", err)
@@ -450,6 +495,9 @@ func emitNode(w *bufio.Writer, n *document.Node, depth int) error {
 	}
 
 	for _, c := range n.Children {
+		if isInlineText && c.Name.NodeNameString() == textNodeIdentifier {
+			continue
+		}
 		err = emitNode(w, c, depth+1)
 		if err != nil {
 			return fmt.Errorf("emit child: %w", err)
