@@ -3,8 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
-	"github.com/7daystosettle/data-tool/dt"
+	"github.com/7daystosettle/data-tool/ko"
 )
 
 func main() {
@@ -17,17 +18,58 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) < 2 {
-		return fmt.Errorf("missing path argument")
+	if len(os.Args) < 3 {
+		fmt.Printf("usage: %s <src_path> <out_path>\n", os.Args[0])
+		os.Exit(1)
 	}
-	path := os.Args[1]
-	fmt.Printf("Path: %s\n", path)
+	inPath := os.Args[1]
+	outPath := os.Args[2]
 
-	info, err := dt.FromXML(path)
+	r, err := os.Open(inPath)
 	if err != nil {
-		return fmt.Errorf("from xml: %w", err)
+		return fmt.Errorf("open file: %w", err)
 	}
-	os.WriteFile("info.txt", []byte(info.String()), 0644)
+	defer r.Close()
+
+	var doc *ko.Ko
+
+	inExt := filepath.Ext(inPath)
+	switch inExt {
+	case ".xml":
+		doc, err = ko.NewFromXml(r)
+		if err != nil {
+			return fmt.Errorf("converting xml to kdl: %w", err)
+		}
+
+	case ".kdl":
+		doc, err = ko.NewFromKdl(r)
+		if err != nil {
+			return fmt.Errorf("converting kdl to xml: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported input file extension: %s", inExt)
+	}
+
+	w, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Base(outPath), err)
+	}
+	defer w.Close()
+
+	switch filepath.Ext(outPath) {
+	case ".xml":
+		err = doc.ToXml(w)
+		if err != nil {
+			return fmt.Errorf("writing xml file: %w", err)
+		}
+	case ".kdl":
+		err = doc.ToKdl(w)
+		if err != nil {
+			return fmt.Errorf("writing kdl file: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported output file extension: %s", filepath.Ext(outPath))
+	}
 
 	return nil
 }
