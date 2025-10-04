@@ -68,7 +68,9 @@ func (e *Ko) ToXml(w io.Writer) error {
 
 func xmlToKdl(r io.Reader) (*document.Document, error) {
 	decoder := xml.NewDecoder(r)
+	var detectedCharset string
 	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		detectedCharset = charset
 		switch strings.ToLower(charset) {
 		case "us-ascii":
 			return input, nil
@@ -182,6 +184,17 @@ func xmlToKdl(r io.Reader) (*document.Document, error) {
 			}
 		}
 	}
+
+	if detectedCharset != "" {
+		charsetNode := &document.Node{
+			Name:       &document.Value{Value: "_charset"},
+			Properties: make(document.Properties),
+			Arguments:  []*document.Value{{Value: detectedCharset}},
+			Children:   []*document.Node{},
+		}
+		doc.Nodes = append([]*document.Node{charsetNode}, doc.Nodes...)
+	}
+
 	return doc, nil
 }
 
@@ -260,12 +273,21 @@ func kdlToXml(doc *document.Document, w io.Writer) error {
 	enc := xml.NewEncoder(w)
 	enc.Indent("", "  ")
 
-	_, err := w.Write([]byte(xml.Header))
+	charset := "UTF-8"
+	nodes := doc.Nodes
+	if len(nodes) > 0 && nodes[0].Name.NodeNameString() == "_charset" {
+		if len(nodes[0].Arguments) > 0 {
+			charset = nodes[0].Arguments[0].ValueString()
+		}
+		nodes = nodes[1:] // Exclude the _charset node from output
+	}
+
+	_, err := w.Write([]byte(fmt.Sprintf("<?xml version=\"1.0\" encoding=\"%s\"?>\n", charset)))
 	if err != nil {
 		return fmt.Errorf("write xml header: %w", err)
 	}
 
-	err = kdlNodesToXml(doc.Nodes, enc)
+	err = kdlNodesToXml(nodes, enc)
 	if err != nil {
 		return fmt.Errorf("kdlNodesToXml: %w", err)
 	}
@@ -280,6 +302,8 @@ func kdlToXml(doc *document.Document, w io.Writer) error {
 func kdlNodesToXml(nodes []*document.Node, enc *xml.Encoder) error {
 	for _, node := range nodes {
 		switch node.Name.NodeNameString() {
+		case "_charset":
+			continue
 		case commentNodeIdentifier:
 			/* 			if len(node.Arguments) > 0 {
 				err := enc.EncodeToken(xml.Comment(node.Arguments[0].ValueString()))
