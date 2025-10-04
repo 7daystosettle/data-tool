@@ -1,0 +1,1 @@
+go run main.go "F:\SteamLibrary\steamapps\common\7 Days To Die\Data\Config\items.xml"
